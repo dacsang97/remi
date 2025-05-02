@@ -47,6 +47,11 @@ var (
 	freezeStyle = lipgloss.NewStyle().
 		Foreground(lipgloss.Color("#FFA500")).
 		Bold(true)
+		
+	logStyle = lipgloss.NewStyle().
+		Border(lipgloss.RoundedBorder()).
+		BorderForeground(lipgloss.Color("#FFA500")).
+		Padding(0, 1)
 )
 
 // TickMsg represents a clock tick message
@@ -150,22 +155,20 @@ func (ui *UI) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return ui, tea.Batch(cmds...)
 
 	case CompleteMsg:
-		// Print notification to terminal
-		fmt.Printf("\n🔔 Notification: Time for '%s'!\n", msg.Name)
+		// Log notification to file instead of terminal
+		ui.app.LogMessage(fmt.Sprintf("Notification: Time for '%s'!", msg.Name))
 
 		// Activate freeze mode if enabled for this event
 		if msg.FreezeDuration > 0 {
 			go func() {
-				fmt.Printf("Activating freeze mode for %s with duration %s\n", 
-					msg.Name, msg.FreezeDuration.String())
+				ui.app.LogMessage(fmt.Sprintf("Activating freeze mode for %s with duration %s", 
+					msg.Name, msg.FreezeDuration.String()))
 				
 				err := ui.freezer.Freeze("Remi Reminder", fmt.Sprintf("Time for: %s\nThis screen will be locked for %s", 
 					msg.Name, msg.FreezeDuration.String()), msg.FreezeDuration)
 				if err != nil {
 					// Log error but continue
-					fmt.Printf("Error activating freeze mode: %v\n", err)
-				} else {
-					fmt.Printf("Freeze mode activated successfully\n")
+					ui.app.LogMessage(fmt.Sprintf("Error activating freeze mode: %v", err))
 				}
 			}()
 		} else {
@@ -173,7 +176,7 @@ func (ui *UI) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			go func() {
 				err := ui.freezer.Freeze("Remi Reminder", fmt.Sprintf("Time for: %s", msg.Name), 5*time.Second)
 				if err != nil {
-					fmt.Printf("Error showing notification dialog: %v\n", err)
+					ui.app.LogMessage(fmt.Sprintf("Error showing notification dialog: %v", err))
 				}
 			}()
 		}
@@ -186,10 +189,6 @@ func (ui *UI) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 // View renders the UI
 func (ui *UI) View() string {
-	if ui.width == 0 {
-		return "Initializing..."
-	}
-
 	var s strings.Builder
 
 	s.WriteString(titleStyle.Render(" Remi - Reminder Application ") + "\n\n")
@@ -197,18 +196,36 @@ func (ui *UI) View() string {
 	// Calculate optimal container width
 	containerWidth := ui.width - 4
 	if containerWidth < 40 {
-		containerWidth = 40 // Minimum width
+		containerWidth = 40
 	}
 
-	// Create a single container for all events with a simple style
-	var events []string
-	
-	// Render each countdown
+	// Display each event
 	for i, countdown := range ui.app.Countdowns {
-		hours := int(countdown.RemainingTime.Hours())
-		minutes := int(countdown.RemainingTime.Minutes()) % 60
-		seconds := int(countdown.RemainingTime.Seconds()) % 60
+		// Create a container for this event
+		container := lipgloss.NewStyle().
+			Border(lipgloss.RoundedBorder()).
+			Width(containerWidth).
+			Align(lipgloss.Left).
+			MarginBottom(1)
 
+		// Format the index
+		indexStr := fmt.Sprintf("[%d]", i)
+
+		// Format the name (truncate if too long)
+		maxNameLength := containerWidth - 40 // Reserve space for other elements
+		if maxNameLength < 10 {
+			maxNameLength = 10
+		}
+		displayName := countdown.Name
+		if len(displayName) > maxNameLength {
+			displayName = displayName[:maxNameLength-3] + "..."
+		}
+
+		// Format the time
+		remainingTime := countdown.RemainingTime
+		hours := int(remainingTime.Hours())
+		minutes := int(remainingTime.Minutes()) % 60
+		seconds := int(remainingTime.Seconds()) % 60
 		timeStr := fmt.Sprintf("%02d:%02d:%02d", hours, minutes, seconds)
 		percentRemaining := countdown.GetPercentRemaining()
 
@@ -229,72 +246,52 @@ func (ui *UI) View() string {
 			statusText = pausedStyle.Render("⏸ Paused")
 		}
 
-		// Create title line with event name and time
-		indexStr := fmt.Sprintf("[%d] ", i)
-		
-		// Calculate available width for name to prevent UI breaking
-		reservedSpace := 30 // Approximate space for other elements
-		availableWidth := containerWidth - reservedSpace
-		
-		// Truncate name if it's too long
-		displayName := countdown.Name
-		if len(displayName)*2 > availableWidth { // Rough estimate for character width
-			maxLen := availableWidth / 2
-			if maxLen > 3 {
-				displayName = displayName[:maxLen-3] + "..."
-			}
-		}
-		
-		// Create a single line for each event
+		// Format the percentage
+		percentStr := fmt.Sprintf("(%d%%)", percentRemaining)
+
+		// Combine all elements into a single line
 		eventLine := lipgloss.JoinHorizontal(
 			lipgloss.Left,
 			indexStr,
-			nameStyle.Render(displayName),
 			"  ",
+			nameStyle.Render(displayName),
+			"   ",
 			timeStyle.Render(timeStr),
 			"  ",
-			fmt.Sprintf("(%d%%)", percentRemaining),
+			percentStr,
 			"  ",
 			statusText,
 		)
-		
-		// Add event to the list
-		events = append(events, eventLine)
-	}
-	
-	// Style for the event box
-	eventBoxStyle := lipgloss.NewStyle().
-		Border(lipgloss.RoundedBorder()).
-		BorderForeground(lipgloss.Color("#555555")).
-		Padding(1).
-		Width(containerWidth)
-		
-	// Render each event in its own box
-	for _, event := range events {
-		s.WriteString(eventBoxStyle.Render(event) + "\n\n")
+
+		// Add the event to the container and append to output
+		s.WriteString(container.Render("  " + eventLine + "  ") + "\n")
 	}
 
-	// Display last command result if available
-	if ui.app.LastCommandResult != "" {
-		resultStyle := lipgloss.NewStyle().
-			Foreground(lipgloss.Color("#FFD700")).
-			Padding(0, 1)
-		s.WriteString(resultStyle.Render("Command result: "+ui.app.LastCommandResult) + "\n\n")
-	}
+	// Input field
+	inputContainer := inputStyle.Width(containerWidth / 2)
+	s.WriteString(inputContainer.Render(ui.inputField.View()) + "\n\n")
 
-	// Display input field with style
-	inputWidth := ui.width - 8
-	if inputWidth < 20 {
-		inputWidth = 20 // Minimum width
-	} else if inputWidth > 60 {
-		inputWidth = 60 // Maximum width
-	}
-	
-	responsiveInputStyle := inputStyle.Copy().Width(inputWidth)
-	s.WriteString(responsiveInputStyle.Render(ui.inputField.View()) + "\n\n")
+	// Help text
 	s.WriteString("Commands: s = start, p = pause, e = end (reset)\n")
 	s.WriteString("Example: 's 0' to start event with index 0\n\n")
-	s.WriteString("Press ESC or Ctrl+C to exit\n")
+	
+	// Last command result
+	if ui.app.LastCommandResult != "" {
+		s.WriteString(ui.app.LastCommandResult + "\n\n")
+	}
+
+	s.WriteString("Press ESC or Ctrl+C to exit\n\n")
+
+	// Display recent logs after help text
+	logs := ui.app.GetRecentLogs()
+	if len(logs) > 0 {
+		logContainer := logStyle.Width(containerWidth)
+		logContent := "📋 Recent Activity:\n"
+		for _, log := range logs {
+			logContent += "• " + log + "\n"
+		}
+		s.WriteString(logContainer.Render(logContent))
+	}
 
 	return s.String()
 }

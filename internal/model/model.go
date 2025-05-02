@@ -3,6 +3,8 @@ package model
 
 import (
 	"fmt"
+	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
@@ -31,16 +33,29 @@ type App struct {
 	LastCommandResult     string
 	freezingEvents        map[int]time.Time
 	freezeTimeRemaining   map[int]time.Duration
+	logFile               *os.File
+	recentLogs            []string
 	mutex                 sync.Mutex
 }
 
 // NewApp creates a new application model
 func NewApp(countdowns []*timer.Countdown, useSystemNotification bool) *App {
+	// Create log directory if it doesn't exist
+	logDir := filepath.Join(os.TempDir(), "remi-logs")
+	_ = os.MkdirAll(logDir, 0755) // Ignore error
+	
+	// Open log file
+	var logFile *os.File
+	logPath := filepath.Join(logDir, "remi.log")
+	logFile, _ = os.OpenFile(logPath, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0644) // Ignore error
+	
 	return &App{
 		Countdowns:            countdowns,
 		UseSystemNotification: useSystemNotification,
 		freezingEvents:        make(map[int]time.Time),
 		freezeTimeRemaining:   make(map[int]time.Duration),
+		logFile:               logFile,
+		recentLogs:            make([]string, 0, 2),
 	}
 }
 
@@ -186,4 +201,45 @@ func (a *App) ParseCommand(input string) (Command, error) {
 		Action: action,
 		Index:  index,
 	}, nil
+}
+
+// LogMessage logs a message to the log file and stores it for UI display
+func (a *App) LogMessage(message string) {
+	a.mutex.Lock()
+	defer a.mutex.Unlock()
+	
+	// Get current timestamp
+	timestamp := time.Now().Format("15:04:05")
+	
+	// Write to log file if available
+	if a.logFile != nil {
+		fullTimestamp := time.Now().Format("2006-01-02 15:04:05")
+		fmt.Fprintf(a.logFile, "[%s] %s\n", fullTimestamp, message)
+	}
+	
+	// Add to recent logs with timestamp (keep only the 2 most recent)
+	logWithTime := fmt.Sprintf("[%s] %s", timestamp, message)
+	a.recentLogs = append(a.recentLogs, logWithTime)
+	if len(a.recentLogs) > 2 {
+		a.recentLogs = a.recentLogs[len(a.recentLogs)-2:]
+	}
+}
+
+// GetRecentLogs returns the most recent log messages for UI display
+func (a *App) GetRecentLogs() []string {
+	a.mutex.Lock()
+	defer a.mutex.Unlock()
+	
+	// Return a copy to avoid race conditions
+	logs := make([]string, len(a.recentLogs))
+	copy(logs, a.recentLogs)
+	return logs
+}
+
+// Close closes any resources used by the application
+func (a *App) Close() error {
+	if a.logFile != nil {
+		return a.logFile.Close()
+	}
+	return nil
 }

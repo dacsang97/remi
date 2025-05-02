@@ -3,28 +3,95 @@ package freeze
 
 import (
 	"fmt"
+	"os"
 	"os/exec"
+	"path/filepath"
 	"runtime"
 	"time"
 )
+
+// Logger provides a simple logging interface
+type Logger interface {
+	Printf(format string, v ...interface{})
+}
+
+// FileLogger implements a simple file logger
+type FileLogger struct {
+	file *os.File
+}
+
+// NewFileLogger creates a new file logger
+func NewFileLogger(filename string) (*FileLogger, error) {
+	// Create log directory if it doesn't exist
+	logDir := filepath.Join(os.TempDir(), "remi-logs")
+	if err := os.MkdirAll(logDir, 0755); err != nil {
+		return nil, err
+	}
+	
+	// Open log file
+	logPath := filepath.Join(logDir, filename)
+	file, err := os.OpenFile(logPath, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0644)
+	if err != nil {
+		return nil, err
+	}
+	
+	return &FileLogger{file: file}, nil
+}
+
+// Printf logs a formatted message to the file
+func (l *FileLogger) Printf(format string, v ...interface{}) {
+	if l.file != nil {
+		fmt.Fprintf(l.file, format+"\n", v...)
+	}
+}
+
+// Close closes the log file
+func (l *FileLogger) Close() error {
+	if l.file != nil {
+		return l.file.Close()
+	}
+	return nil
+}
+
+// NoopLogger implements a logger that does nothing
+type NoopLogger struct{}
+
+// Printf does nothing for NoopLogger
+func (l *NoopLogger) Printf(format string, v ...interface{}) {}
 
 // Service defines the interface for freeze services
 type Service interface {
 	Freeze(title, message string, duration time.Duration) error
 	IsSupported() bool
+	Close() error
 }
 
 // MacOSFreezeService implements freeze functionality for macOS
-type MacOSFreezeService struct{}
+type MacOSFreezeService struct {
+	logger Logger
+}
 
 // NewMacOSFreezeService creates a new macOS freeze service
 func NewMacOSFreezeService() *MacOSFreezeService {
-	return &MacOSFreezeService{}
+	logger, err := NewFileLogger("freeze.log")
+	if err != nil {
+		// Fall back to noop logger if file logger fails
+		return &MacOSFreezeService{logger: &NoopLogger{}}
+	}
+	return &MacOSFreezeService{logger: logger}
 }
 
 // IsSupported checks if the current OS supports this freeze service
 func (f *MacOSFreezeService) IsSupported() bool {
 	return runtime.GOOS == "darwin"
+}
+
+// Close closes any resources used by the service
+func (f *MacOSFreezeService) Close() error {
+	if closer, ok := f.logger.(interface{ Close() error }); ok {
+		return closer.Close()
+	}
+	return nil
 }
 
 // Freeze displays a fullscreen overlay for the specified duration
@@ -48,20 +115,20 @@ func (f *MacOSFreezeService) Freeze(title, message string, duration time.Duratio
 	cmd := exec.Command("osascript", "-e", script)
 	
 	// Log for debugging
-	fmt.Printf("Executing freeze command with AppleScript dialog\n")
+	f.logger.Printf("Executing freeze command with AppleScript dialog")
 	
 	// Start the command but don't wait for it to complete
 	if err := cmd.Start(); err != nil {
-		fmt.Printf("Error starting AppleScript: %v\n", err)
+		f.logger.Printf("Error starting AppleScript: %v", err)
 		return fmt.Errorf("failed to start freeze command: %w", err)
 	}
 	
 	// Run the command in a separate goroutine
 	go func() {
 		if err := cmd.Wait(); err != nil {
-			fmt.Printf("Error during AppleScript execution: %v\n", err)
+			f.logger.Printf("Error during AppleScript execution: %v", err)
 		} else {
-			fmt.Printf("Freeze command completed successfully\n")
+			f.logger.Printf("Freeze command completed successfully")
 		}
 	}()
 	
@@ -69,16 +136,23 @@ func (f *MacOSFreezeService) Freeze(title, message string, duration time.Duratio
 }
 
 // NoopFreezeService implements a no-operation freeze service for unsupported platforms
-type NoopFreezeService struct{}
+type NoopFreezeService struct {
+	logger Logger
+}
 
 // NewNoopFreezeService creates a new no-operation freeze service
 func NewNoopFreezeService() *NoopFreezeService {
-	return &NoopFreezeService{}
+	return &NoopFreezeService{logger: &NoopLogger{}}
 }
 
 // IsSupported always returns false for NoopFreezeService
 func (f *NoopFreezeService) IsSupported() bool {
 	return false
+}
+
+// Close is a no-op for NoopFreezeService
+func (f *NoopFreezeService) Close() error {
+	return nil
 }
 
 // Freeze is a no-op implementation that always succeeds

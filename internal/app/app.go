@@ -58,6 +58,9 @@ func (a *App) Run() error {
 
 	// Create application model
 	app := model.NewApp(a.countdowns, useSystemNotification)
+	
+	// Ensure we close resources when done
+	defer app.Close()
 
 	// Create UI
 	ui := ui.NewUI(app)
