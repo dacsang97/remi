@@ -28,6 +28,7 @@ remi/
 - System notifications (macOS supported)
 - Terminal-based user interface
 - Start, pause, and reset timers
+- Fullscreen freeze mode to enforce breaks (macOS only)
 
 ## Configuration
 
@@ -47,10 +48,12 @@ events:
     interval: "30m"
     notify: true
     autoStart: true  # Optional, defaults to true if not specified
+    freeze: "1m"     # Optional, locks screen for 1 minute when timer completes
   - name: "Stand up and walk around"
     interval: "1h"
     notify: true
     autoStart: false  # Optional, set to false to start in paused state
+    freeze: "5m"      # Optional, locks screen for 5 minutes when timer completes
 ```
 
 ## Commands

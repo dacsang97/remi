@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/dacsang97/remi/pkg/timer"
@@ -14,6 +15,7 @@ import (
 type CompleteEvent struct {
 	Index int
 	Name  string
+	FreezeDuration time.Duration
 }
 
 // Command represents a user command with parsed arguments
@@ -27,6 +29,9 @@ type App struct {
 	Countdowns            []*timer.Countdown
 	UseSystemNotification bool
 	LastCommandResult     string
+	freezingEvents        map[int]time.Time
+	freezeTimeRemaining   map[int]time.Duration
+	mutex                 sync.Mutex
 }
 
 // NewApp creates a new application model
@@ -34,74 +39,149 @@ func NewApp(countdowns []*timer.Countdown, useSystemNotification bool) *App {
 	return &App{
 		Countdowns:            countdowns,
 		UseSystemNotification: useSystemNotification,
+		freezingEvents:        make(map[int]time.Time),
+		freezeTimeRemaining:   make(map[int]time.Duration),
 	}
 }
 
-// Tick updates all active countdowns and returns completed events
+// Tick updates all countdowns and returns any completed events
 func (a *App) Tick() []CompleteEvent {
+	a.mutex.Lock()
+	defer a.mutex.Unlock()
+
 	var completed []CompleteEvent
 
+	// First, check if any freezing events have completed their freeze period
+	now := time.Now()
+	for index, endTime := range a.freezingEvents {
+		// Update the remaining freeze time
+		if now.Before(endTime) {
+			a.freezeTimeRemaining[index] = endTime.Sub(now)
+		} else {
+			// Freeze period is over, reset the timer and start it
+			if index >= 0 && index < len(a.Countdowns) {
+				a.Countdowns[index].Reset()
+				a.Countdowns[index].Start() // Automatically start the next round
+			}
+			// Remove from freezing events
+			delete(a.freezingEvents, index)
+			delete(a.freezeTimeRemaining, index)
+		}
+	}
+
+	// Then, update all countdowns
 	for i, countdown := range a.Countdowns {
-		if countdown.Tick(time.Second) {
-			completed = append(completed, CompleteEvent{
+		// Skip updating if this event is currently freezing
+		if _, freezing := a.freezingEvents[i]; freezing {
+			continue
+		}
+
+		// Update the countdown
+		if complete := countdown.Update(); complete {
+			// Create a complete event
+			event := CompleteEvent{
 				Index: i,
 				Name:  countdown.Name,
-			})
-			// Reset the timer after completion
-			countdown.Reset()
+				FreezeDuration: countdown.FreezeDuration,
+			}
+			completed = append(completed, event)
+
+			// If this event has a freeze duration, add it to freezing events
+			if countdown.FreezeDuration > 0 {
+				// Calculate when the freeze period will end
+				endTime := now.Add(countdown.FreezeDuration)
+				a.freezingEvents[i] = endTime
+				a.freezeTimeRemaining[i] = countdown.FreezeDuration
+				
+				// Don't reset the timer yet, it will be reset after the freeze period
+				countdown.Pause()
+			} else {
+				// No freeze duration, reset immediately
+				countdown.Reset()
+			}
 		}
 	}
 
 	return completed
 }
 
-// ExecuteCommand processes a user command and updates the model
-func (a *App) ExecuteCommand(commandStr string) string {
-	cmd, err := parseCommand(commandStr)
-	if err != nil {
-		return err.Error()
-	}
+// IsEventFreezing checks if an event is currently in freeze mode
+func (a *App) IsEventFreezing(index int) bool {
+	a.mutex.Lock()
+	defer a.mutex.Unlock()
+	_, freezing := a.freezingEvents[index]
+	return freezing
+}
 
-	// Check if index is valid
+// GetFreezeTimeRemaining returns the remaining freeze time for an event
+func (a *App) GetFreezeTimeRemaining(index int) time.Duration {
+	a.mutex.Lock()
+	defer a.mutex.Unlock()
+	return a.freezeTimeRemaining[index]
+}
+
+// ExecuteCommand executes a user command
+func (a *App) ExecuteCommand(cmd Command) string {
 	if cmd.Index < 0 || cmd.Index >= len(a.Countdowns) {
-		return fmt.Sprintf("Index out of range: %d", cmd.Index)
+		return fmt.Sprintf("Invalid index: %d", cmd.Index)
 	}
 
-	// Process command
+	// Check if this event is currently freezing
+	if a.IsEventFreezing(cmd.Index) {
+		return fmt.Sprintf("Cannot control event %d while it is freezing", cmd.Index)
+	}
+
+	countdown := a.Countdowns[cmd.Index]
+	
 	switch cmd.Action {
-	case "s": // Start
-		a.Countdowns[cmd.Index].Start()
-		return fmt.Sprintf("Started '%s'", a.Countdowns[cmd.Index].Name)
-
-	case "p": // Pause
-		a.Countdowns[cmd.Index].Pause()
-		return fmt.Sprintf("Paused '%s'", a.Countdowns[cmd.Index].Name)
-
-	case "e": // End/Reset
-		a.Countdowns[cmd.Index].End()
-		return fmt.Sprintf("Reset '%s'", a.Countdowns[cmd.Index].Name)
-
+	case "start":
+		countdown.Start()
+		return fmt.Sprintf("Started event %d: %s", cmd.Index, countdown.Name)
+	case "pause":
+		countdown.Pause()
+		return fmt.Sprintf("Paused event %d: %s", cmd.Index, countdown.Name)
+	case "end":
+		countdown.Reset()
+		return fmt.Sprintf("Reset event %d: %s", cmd.Index, countdown.Name)
 	default:
 		return fmt.Sprintf("Unknown command: %s", cmd.Action)
 	}
 }
 
-// parseCommand parses a command string into a structured Command
-func parseCommand(commandStr string) (Command, error) {
-	parts := strings.Fields(commandStr)
-	if len(parts) < 2 {
-		return Command{}, fmt.Errorf("Invalid command. Use: s/p/e + index")
+// ParseCommand parses a command string into a Command struct
+func (a *App) ParseCommand(input string) (Command, error) {
+	input = strings.TrimSpace(input)
+	parts := strings.Fields(input)
+	
+	if len(parts) != 2 {
+		return Command{}, fmt.Errorf("invalid command format, expected: [action] [index]")
 	}
-
+	
 	action := parts[0]
+	if action != "s" && action != "p" && action != "e" {
+		return Command{}, fmt.Errorf("invalid action, expected: s (start), p (pause), or e (end)")
+	}
+	
+	// Convert short form to full action name
+	switch action {
+	case "s":
+		action = "start"
+	case "p":
+		action = "pause"
+	case "e":
+		action = "end"
+	}
+	
 	indexStr := parts[1]
-
-	// Parse index
 	index, err := strconv.Atoi(indexStr)
 	if err != nil {
-		return Command{}, fmt.Errorf("Invalid index: %s", indexStr)
+		return Command{}, fmt.Errorf("invalid index: %s", indexStr)
 	}
-
+	
+	if index < 0 || index >= len(a.Countdowns) {
+		return Command{}, fmt.Errorf("index out of range: %d", index)
+	}
+	
 	return Command{
 		Action: action,
 		Index:  index,
