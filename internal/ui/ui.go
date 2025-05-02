@@ -9,8 +9,8 @@ import (
 	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+	"github.com/dacsang97/remi/internal/freeze"
 	"github.com/dacsang97/remi/internal/model"
-	"github.com/dacsang97/remi/internal/notification"
 )
 
 // Styles for UI components
@@ -43,6 +43,10 @@ var (
 	pausedStyle = lipgloss.NewStyle().
 		Foreground(lipgloss.Color("#FF5F87")).
 		Bold(true)
+		
+	freezeStyle = lipgloss.NewStyle().
+		Foreground(lipgloss.Color("#FFA500")).
+		Bold(true)
 )
 
 // TickMsg represents a clock tick message
@@ -52,12 +56,13 @@ type TickMsg time.Time
 type CompleteMsg struct {
 	Index int
 	Name  string
+	FreezeDuration time.Duration
 }
 
 // UI represents the terminal user interface
 type UI struct {
 	app               *model.App
-	notifier          notification.Service
+	freezer           freeze.Service
 	width             int
 	height            int
 	inputField        textinput.Model
@@ -65,7 +70,7 @@ type UI struct {
 }
 
 // NewUI creates a new UI instance
-func NewUI(app *model.App, notifier notification.Service) *UI {
+func NewUI(app *model.App) *UI {
 	// Initialize input field
 	ti := textinput.New()
 	ti.Placeholder = "Enter command (s/p/e + index) e.g.: s 1"
@@ -77,7 +82,7 @@ func NewUI(app *model.App, notifier notification.Service) *UI {
 
 	return &UI{
 		app:               app,
-		notifier:          notifier,
+		freezer:           freeze.NewFreezeService(),
 		inputField:        ti,
 		inputMode:         true,
 	}
@@ -109,8 +114,13 @@ func (ui *UI) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// Check for Enter key press
 		if msg.Type == tea.KeyEnter {
 			// Parse command from input field
-			command := ui.inputField.Value()
-			ui.app.LastCommandResult = ui.app.ExecuteCommand(command)
+			commandStr := ui.inputField.Value()
+			cmd, err := ui.app.ParseCommand(commandStr)
+			if err != nil {
+				ui.app.LastCommandResult = err.Error()
+			} else {
+				ui.app.LastCommandResult = ui.app.ExecuteCommand(cmd)
+			}
 
 			// Clear input field after executing command
 			ui.inputField.SetValue("")
@@ -133,7 +143,7 @@ func (ui *UI) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// Create commands for completed events
 		for _, event := range completedEvents {
 			cmds = append(cmds, func() tea.Msg {
-				return CompleteMsg{Index: event.Index, Name: event.Name}
+				return CompleteMsg{Index: event.Index, Name: event.Name, FreezeDuration: event.FreezeDuration}
 			})
 		}
 		
@@ -143,16 +153,27 @@ func (ui *UI) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// Print notification to terminal
 		fmt.Printf("\n🔔 Notification: Time for '%s'!\n", msg.Name)
 
-		// Send system notification if enabled
-		if ui.app.UseSystemNotification && 
-		   msg.Index >= 0 && 
-		   msg.Index < len(ui.app.Countdowns) && 
-		   ui.app.Countdowns[msg.Index].UseNotification {
+		// Activate freeze mode if enabled for this event
+		if msg.FreezeDuration > 0 {
 			go func() {
-				err := ui.notifier.Send("Remi Reminder", fmt.Sprintf("Time for: %s", msg.Name))
+				fmt.Printf("Activating freeze mode for %s with duration %s\n", 
+					msg.Name, msg.FreezeDuration.String())
+				
+				err := ui.freezer.Freeze("Remi Reminder", fmt.Sprintf("Time for: %s\nThis screen will be locked for %s", 
+					msg.Name, msg.FreezeDuration.String()), msg.FreezeDuration)
 				if err != nil {
 					// Log error but continue
-					fmt.Printf("Error sending system notification: %v\n", err)
+					fmt.Printf("Error activating freeze mode: %v\n", err)
+				} else {
+					fmt.Printf("Freeze mode activated successfully\n")
+				}
+			}()
+		} else {
+			// If no freeze duration, just show a notification dialog
+			go func() {
+				err := ui.freezer.Freeze("Remi Reminder", fmt.Sprintf("Time for: %s", msg.Name), 5*time.Second)
+				if err != nil {
+					fmt.Printf("Error showing notification dialog: %v\n", err)
 				}
 			}()
 		}
@@ -173,13 +194,6 @@ func (ui *UI) View() string {
 
 	s.WriteString(titleStyle.Render(" Remi - Reminder Application ") + "\n\n")
 
-	// Display system notification status
-	notificationStatus := "Off"
-	if ui.app.UseSystemNotification {
-		notificationStatus = "On"
-	}
-	s.WriteString(fmt.Sprintf("macOS System Notifications: %s\n\n", notificationStatus))
-
 	// Calculate optimal container width
 	containerWidth := ui.width - 4
 	if containerWidth < 40 {
@@ -198,15 +212,18 @@ func (ui *UI) View() string {
 		timeStr := fmt.Sprintf("%02d:%02d:%02d", hours, minutes, seconds)
 		percentRemaining := countdown.GetPercentRemaining()
 
-		// Show notification icon if enabled
-		notifyIcon := " "
-		if countdown.UseNotification && ui.app.UseSystemNotification {
-			notifyIcon = "🔔 "
-		}
-
 		// Show activity status
 		statusText := ""
-		if countdown.IsActive {
+		
+		// Check if the timer is in freeze mode
+		if ui.app.IsEventFreezing(i) {
+			// Show freeze countdown
+			freezeRemaining := ui.app.GetFreezeTimeRemaining(i)
+			minutes := int(freezeRemaining.Minutes())
+			seconds := int(freezeRemaining.Seconds()) % 60
+			freezeTimeStr := fmt.Sprintf("%02d:%02d", minutes, seconds)
+			statusText = freezeStyle.Render(fmt.Sprintf("⏸ Freezing (%s)", freezeTimeStr))
+		} else if countdown.IsActive {
 			statusText = activeStyle.Render("▶ Active")
 		} else {
 			statusText = pausedStyle.Render("⏸ Paused")
@@ -232,7 +249,6 @@ func (ui *UI) View() string {
 		eventLine := lipgloss.JoinHorizontal(
 			lipgloss.Left,
 			indexStr,
-			notifyIcon,
 			nameStyle.Render(displayName),
 			"  ",
 			timeStyle.Render(timeStr),

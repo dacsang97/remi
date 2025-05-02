@@ -13,16 +13,18 @@ type Countdown struct {
 	RemainingTime    time.Duration
 	UseNotification  bool
 	IsActive         bool
+	FreezeDuration   time.Duration
 }
 
 // NewCountdown creates a new countdown timer
-func NewCountdown(name string, duration time.Duration, useNotification bool, autoStart bool) *Countdown {
+func NewCountdown(name string, duration time.Duration, useNotification bool, autoStart bool, freezeDuration time.Duration) *Countdown {
 	return &Countdown{
 		Name:             name,
 		OriginalDuration: duration,
 		RemainingTime:    duration,
 		UseNotification:  useNotification,
 		IsActive:         autoStart,
+		FreezeDuration:   freezeDuration,
 	}
 }
 
@@ -35,6 +37,12 @@ func (c *Countdown) Tick(d time.Duration) bool {
 
 	c.RemainingTime -= d
 	return c.RemainingTime <= 0
+}
+
+// Update decrements the timer by one second if active
+// Returns true if the timer has completed this tick
+func (c *Countdown) Update() bool {
+	return c.Tick(time.Second)
 }
 
 // Reset resets the timer to its original duration

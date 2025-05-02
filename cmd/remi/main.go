@@ -21,9 +21,14 @@ func main() {
 	}()
 
 	// Create and run the application
-	application := app.NewApplication("remi.yaml")
+	application, err := app.New("remi.yaml")
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error creating application: %v\n", err)
+		os.Exit(1)
+	}
+	
 	if err := application.Run(); err != nil {
-		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+		fmt.Fprintf(os.Stderr, "Error running application: %v\n", err)
 		os.Exit(1)
 	}
 }

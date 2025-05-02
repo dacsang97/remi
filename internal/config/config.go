@@ -27,6 +27,7 @@ type Event struct {
 	Interval  string `yaml:"interval"`
 	Notify    bool   `yaml:"notify"`
 	AutoStart *bool  `yaml:"autoStart,omitempty"`
+	Freeze    string `yaml:"freeze,omitempty"`
 }
 
 // EventConfig represents a parsed event with validated duration
@@ -35,6 +36,7 @@ type EventConfig struct {
 	OriginalDuration time.Duration
 	UseNotification  bool
 	IsActive         bool
+	FreezeDuration   time.Duration
 }
 
 // Load reads and parses the configuration file
@@ -94,11 +96,22 @@ func ParseEvents(events []Event) ([]EventConfig, error) {
 			autoStart = false
 		}
 
+		// Parse freeze duration if specified
+		var freezeDuration time.Duration
+		if event.Freeze != "" {
+			freezeDuration, err = time.ParseDuration(event.Freeze)
+			if err != nil {
+				return nil, fmt.Errorf("error parsing freeze duration '%s' for event '%s': %w",
+					event.Freeze, event.Name, err)
+			}
+		}
+
 		result = append(result, EventConfig{
 			Name:             event.Name,
 			OriginalDuration: duration,
 			UseNotification:  event.Notify,
 			IsActive:         autoStart,
+			FreezeDuration:   freezeDuration,
 		})
 	}
 

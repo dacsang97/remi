@@ -8,35 +8,28 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/dacsang97/remi/internal/config"
 	"github.com/dacsang97/remi/internal/model"
-	"github.com/dacsang97/remi/internal/notification"
 	"github.com/dacsang97/remi/internal/ui"
 	"github.com/dacsang97/remi/pkg/timer"
 )
 
-// Application represents the main application
-type Application struct {
-	configPath string
+// App represents the main application
+type App struct {
+	config     config.Config
+	countdowns []*timer.Countdown
 }
 
-// NewApplication creates a new application instance
-func NewApplication(configPath string) *Application {
-	return &Application{
-		configPath: configPath,
-	}
-}
-
-// Run starts the application
-func (a *Application) Run() error {
-	// Load configuration - will try home directory first, then current directory
-	cfg, err := config.Load(a.configPath)
+// New creates a new application instance
+func New(configPath string) (*App, error) {
+	// Load configuration
+	cfg, err := config.Load(configPath)
 	if err != nil {
-		return fmt.Errorf("error loading configuration: %w", err)
+		return nil, fmt.Errorf("error loading config: %w", err)
 	}
 
 	// Parse events from configuration
 	eventConfigs, err := config.ParseEvents(cfg.Events)
 	if err != nil {
-		return fmt.Errorf("error parsing events: %w", err)
+		return nil, fmt.Errorf("error parsing events: %w", err)
 	}
 
 	// Create countdowns from event configurations
@@ -47,32 +40,35 @@ func (a *Application) Run() error {
 			eventConfig.OriginalDuration,
 			eventConfig.UseNotification,
 			eventConfig.IsActive,
+			eventConfig.FreezeDuration,
 		)
 		countdowns = append(countdowns, countdown)
 	}
 
+	return &App{
+		config:     cfg,
+		countdowns: countdowns,
+	}, nil
+}
+
+// Run starts the application
+func (a *App) Run() error {
 	// Determine if system notifications should be used
-	useSystemNotification := cfg.AppConfig.UseSystemNotification && runtime.GOOS == "darwin"
+	useSystemNotification := a.config.AppConfig.UseSystemNotification && runtime.GOOS == "darwin"
 
 	// Create application model
-	app := model.NewApp(countdowns, useSystemNotification)
-
-	// Create notification service
-	notifier := notification.NewNotifier()
+	app := model.NewApp(a.countdowns, useSystemNotification)
 
 	// Create UI
-	ui := ui.NewUI(app, notifier)
+	ui := ui.NewUI(app)
 
-	// Start the application with bubble tea
+	// Create program
 	p := tea.NewProgram(
 		ui,
 		tea.WithAltScreen(),
-		tea.WithMouseCellMotion(),
 	)
 
-	if _, err := p.Run(); err != nil {
-		return fmt.Errorf("error running application: %w", err)
-	}
-
-	return nil
+	// Run program
+	_, err := p.Run()
+	return err
 }
