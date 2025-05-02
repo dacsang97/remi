@@ -34,8 +34,7 @@ var (
 	inputStyle = lipgloss.NewStyle().
 		Border(lipgloss.RoundedBorder()).
 		BorderForeground(lipgloss.Color("#25A065")).
-		Padding(0, 1).
-		Width(40)
+		Padding(0, 1)
 
 	activeStyle = lipgloss.NewStyle().
 		Foreground(lipgloss.Color("#25A065")).
@@ -181,25 +180,22 @@ func (ui *UI) View() string {
 	}
 	s.WriteString(fmt.Sprintf("macOS System Notifications: %s\n\n", notificationStatus))
 
-	// Style for event container
-	eventContainerStyle := lipgloss.NewStyle().
-		Border(lipgloss.RoundedBorder()).
-		BorderForeground(lipgloss.Color("#555555")).
-		Padding(1).
-		Width(ui.width - 4).
-		MarginBottom(1)
+	// Calculate optimal container width
+	containerWidth := ui.width - 4
+	if containerWidth < 40 {
+		containerWidth = 40 // Minimum width
+	}
 
+	// Create a single container for all events with a simple style
+	var events []string
+	
 	// Render each countdown
 	for i, countdown := range ui.app.Countdowns {
-		var eventBuilder strings.Builder
-
 		hours := int(countdown.RemainingTime.Hours())
 		minutes := int(countdown.RemainingTime.Minutes()) % 60
 		seconds := int(countdown.RemainingTime.Seconds()) % 60
 
 		timeStr := fmt.Sprintf("%02d:%02d:%02d", hours, minutes, seconds)
-
-		// Calculate percentage of time remaining
 		percentRemaining := countdown.GetPercentRemaining()
 
 		// Show notification icon if enabled
@@ -218,11 +214,26 @@ func (ui *UI) View() string {
 
 		// Create title line with event name and time
 		indexStr := fmt.Sprintf("[%d] ", i)
-		titleLine := lipgloss.JoinHorizontal(
+		
+		// Calculate available width for name to prevent UI breaking
+		reservedSpace := 30 // Approximate space for other elements
+		availableWidth := containerWidth - reservedSpace
+		
+		// Truncate name if it's too long
+		displayName := countdown.Name
+		if len(displayName)*2 > availableWidth { // Rough estimate for character width
+			maxLen := availableWidth / 2
+			if maxLen > 3 {
+				displayName = displayName[:maxLen-3] + "..."
+			}
+		}
+		
+		// Create a single line for each event
+		eventLine := lipgloss.JoinHorizontal(
 			lipgloss.Left,
 			indexStr,
 			notifyIcon,
-			nameStyle.Render(countdown.Name),
+			nameStyle.Render(displayName),
 			"  ",
 			timeStyle.Render(timeStr),
 			"  ",
@@ -230,11 +241,21 @@ func (ui *UI) View() string {
 			"  ",
 			statusText,
 		)
-
-		eventBuilder.WriteString(titleLine)
-
-		// Add styled event to container
-		s.WriteString(eventContainerStyle.Render(eventBuilder.String()))
+		
+		// Add event to the list
+		events = append(events, eventLine)
+	}
+	
+	// Style for the event box
+	eventBoxStyle := lipgloss.NewStyle().
+		Border(lipgloss.RoundedBorder()).
+		BorderForeground(lipgloss.Color("#555555")).
+		Padding(1).
+		Width(containerWidth)
+		
+	// Render each event in its own box
+	for _, event := range events {
+		s.WriteString(eventBoxStyle.Render(event) + "\n\n")
 	}
 
 	// Display last command result if available
@@ -242,14 +263,22 @@ func (ui *UI) View() string {
 		resultStyle := lipgloss.NewStyle().
 			Foreground(lipgloss.Color("#FFD700")).
 			Padding(0, 1)
-		s.WriteString("\n" + resultStyle.Render("Command result: "+ui.app.LastCommandResult) + "\n")
+		s.WriteString(resultStyle.Render("Command result: "+ui.app.LastCommandResult) + "\n\n")
 	}
 
 	// Display input field with style
-	s.WriteString("\n" + inputStyle.Render(ui.inputField.View()) + "\n")
-	s.WriteString("\nCommands: s = start, p = pause, e = end (reset)\n")
-	s.WriteString("Example: 's 0' to start event with index 0\n")
-	s.WriteString("\nPress ESC or Ctrl+C to exit\n")
+	inputWidth := ui.width - 8
+	if inputWidth < 20 {
+		inputWidth = 20 // Minimum width
+	} else if inputWidth > 60 {
+		inputWidth = 60 // Maximum width
+	}
+	
+	responsiveInputStyle := inputStyle.Copy().Width(inputWidth)
+	s.WriteString(responsiveInputStyle.Render(ui.inputField.View()) + "\n\n")
+	s.WriteString("Commands: s = start, p = pause, e = end (reset)\n")
+	s.WriteString("Example: 's 0' to start event with index 0\n\n")
+	s.WriteString("Press ESC or Ctrl+C to exit\n")
 
 	return s.String()
 }
