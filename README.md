@@ -1,6 +1,6 @@
 # Remi - Reminder Application
 
-A terminal-based reminder application with system notifications support.
+A terminal-based reminder application.
 
 ## Project Structure
 
@@ -14,8 +14,8 @@ remi/
 ├── internal/           # Application-specific packages
 │   ├── app/            # Main application logic
 │   ├── config/         # Configuration handling
+│   ├── freeze/         # Freeze mode functionality
 │   ├── model/          # Business logic and application state
-│   ├── notification/   # System notification handling
 │   └── ui/             # Terminal user interface
 ├── pkg/                # Reusable packages
 │   └── timer/          # Countdown timer functionality
@@ -25,10 +25,9 @@ remi/
 ## Features
 
 - Multiple configurable reminders
-- System notifications (macOS supported)
 - Terminal-based user interface
 - Start, pause, and reset timers
-- Fullscreen freeze mode to enforce breaks (macOS only)
+- Dialog-based freeze mode to enforce breaks (macOS only)
 
 ## Configuration
 
@@ -41,26 +40,27 @@ Example configuration:
 
 ```yaml
 config:
-  use_system_notification: true
+  # Application-wide settings
+  # Currently no global settings are used
 
 events:
   - name: "Drink water"
     interval: "30m"
-    notify: true
-    autoStart: true  # Optional, defaults to true if not specified
-    freeze: "1m"     # Optional, locks screen for 1 minute when timer completes
+    notify: true        # Legacy option, kept for backward compatibility
+    autoStart: true     # Optional, defaults to true if not specified
+    freeze: "1m"        # Optional, shows dialog for 1 minute when timer completes
   - name: "Stand up and walk around"
     interval: "1h"
-    notify: true
-    autoStart: false  # Optional, set to false to start in paused state
-    freeze: "5m"      # Optional, locks screen for 5 minutes when timer completes
+    notify: true        # Legacy option, kept for backward compatibility
+    autoStart: false    # Optional, set to false to start in paused state
+    freeze: "5m"        # Optional, shows dialog for 5 minutes when timer completes
 ```
 
 ### Freeze Functionality
 
 The `freeze` option allows you to enforce breaks by displaying a blocking dialog when a timer completes:
 
-- When a timer with `freeze` set completes, a dialog appears and blocks interaction for the specified duration
+- When a timer with `freeze` set completes, a macOS dialog appears for the specified duration
 - During the freeze period, the timer shows "⏸ Freezing (MM:SS)" with a countdown of the remaining time
 - You cannot control (start/pause/reset) a timer while it's in freeze mode
 - After the freeze period ends, the timer automatically starts the next round
