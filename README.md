@@ -56,6 +56,17 @@ events:
     freeze: "5m"      # Optional, locks screen for 5 minutes when timer completes
 ```
 
+### Freeze Functionality
+
+The `freeze` option allows you to enforce breaks by displaying a blocking dialog when a timer completes:
+
+- When a timer with `freeze` set completes, a dialog appears and blocks interaction for the specified duration
+- During the freeze period, the timer shows "⏸ Freezing (MM:SS)" with a countdown of the remaining time
+- You cannot control (start/pause/reset) a timer while it's in freeze mode
+- After the freeze period ends, the timer automatically starts the next round
+
+This is useful for enforcing breaks and preventing you from immediately dismissing reminders.
+
 ## Commands
 
 - `s <index>` - Start/resume a timer
